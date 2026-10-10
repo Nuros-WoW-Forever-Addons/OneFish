@@ -1,0 +1,47 @@
+name: Package Addon on Push
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: "node24"
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Addon ZIP
+        run: |
+          ADDON_NAME="${GITHUB_REPOSITORY#*/}"
+          mkdir -p "staging/${ADDON_NAME}"
+          rsync -av --exclude='.git' \
+                    --exclude='.github' \
+                    --exclude='.gitignore' \
+                    --exclude='staging' \
+                    --exclude='*.zip' \
+                    ./ "staging/${ADDON_NAME}/"
+          cd staging
+          zip -r "../${ADDON_NAME}.zip" "${ADDON_NAME}"
+          cd ..
+
+      - name: Publish Latest Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ADDON_NAME="${GITHUB_REPOSITORY#*/}"
+          
+          # Delete existing tag/release if it exists so it updates in place
+          gh release delete latest --yes || true
+          git tag -d latest || true
+          git push origin :latest || true
+          
+          # Create fresh release and attach the zip
+          gh release create latest "${ADDON_NAME}.zip" \
+            --title "${ADDON_NAME} (Latest Build)" \
+            --notes "Automated build from commit ${{ github.sha }}."
