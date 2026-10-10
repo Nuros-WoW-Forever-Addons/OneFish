@@ -421,8 +421,10 @@ function OneFish:UpdateFishingMode()
 
     if isPole and not self.isFishingMode then
         self:EnterFishingMode(poleName)
+        self:RefreshUI()
     elseif not isPole and self.isFishingMode then
         self:ExitFishingMode()
+        self:RefreshUI()
     end
 end
 
@@ -509,6 +511,7 @@ function OneFish:ArmDoubleCast(button)
                     SetOverrideBindingClick(self.secureButton, true, buttonKey, "OneFishSecureButton")
                 end
                 appliedLure = true
+                self:Debug("  armed " .. buttonKey .. " -> use lure " .. tostring(lureName) .. " (bag " .. bag .. ", slot " .. slot .. ")")
                 OneFish:Print("Applying " .. (lureName or "lure") .. "...")
             end
         end
@@ -520,8 +523,12 @@ function OneFish:ArmDoubleCast(button)
 
             if SetOverrideBindingSpell then
                 SetOverrideBindingSpell(self.secureButton, true, buttonKey, spellName or "Fishing")
+                self:Debug("  armed " .. buttonKey .. " -> SetOverrideBindingSpell('" .. tostring(spellName) .. "'). Release the button to cast.")
             elseif SetOverrideBindingClick then
                 SetOverrideBindingClick(self.secureButton, true, buttonKey, "OneFishSecureButton")
+                self:Debug("  armed " .. buttonKey .. " -> secure button click (spell '" .. tostring(spellName) .. "')")
+            else
+                self:Debug("  FAILED: no override binding API available on this client")
             end
         end
 
@@ -543,17 +550,44 @@ function OneFish:ArmDoubleCast(button)
     end
 end
 
---- Unified Mouse Down Click Interceptor
-function OneFish:HandleMouseDown(button)
-    button = button or "RightButton"
+--- Debug trace output (enabled with /of debug, never saved)
+function OneFish:Debug(msg)
+    if not self.debugMode then return end
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[OneFish Debug]|r " .. tostring(msg))
+    end
+end
 
-    if not self:IsClickButtonAllowed(button) then return end
-    if not OneFishDB or not OneFishDB.enabled or not OneFishDB.doubleClickCast then return end
-    if not self.isFishingMode then return end
-    if InCombatLockdown and InCombatLockdown() then return end
+--- Unified Mouse Down Click Interceptor
+function OneFish:HandleMouseDown(button, source)
+    button = button or "RightButton"
+    self:Debug("Mouse down: " .. tostring(button) .. " (via " .. tostring(source or "?") .. ")")
+
+    if not self:IsClickButtonAllowed(button) then
+        self:Debug("  ignored: button not allowed by Trigger Mouse Button setting")
+        return
+    end
+    if not OneFishDB or not OneFishDB.enabled or not OneFishDB.doubleClickCast then
+        self:Debug("  ignored: addon or double-click casting disabled")
+        return
+    end
+    if InCombatLockdown and InCombatLockdown() then
+        self:Debug("  ignored: in combat")
+        return
+    end
+
+    -- Lazy re-check in case an equip event was missed (item cache, etc.)
+    if not self.isFishingMode then
+        self:UpdateFishingMode()
+    end
+    if not self.isFishingMode then
+        self:Debug("  ignored: fishing mode is off (no fishing pole detected)")
+        return
+    end
 
     -- Ignore if hovering over bobber with Right-Click (reeling in / looting)
     if button == "RightButton" and self:IsMouseOverBobber() then
+        self:Debug("  ignored: cursor is over the bobber (reel-in click)")
         if self.secureButton and ClearOverrideBindings then
             ClearOverrideBindings(self.secureButton)
             self.secureButtonArmedTime = nil
@@ -565,22 +599,32 @@ function OneFish:HandleMouseDown(button)
 
     -- Ignore if hovering over an NPC, vendor, or player
     if self:IsMouseOverUnit() then
+        self:Debug("  ignored: cursor is over a unit")
         self.lastClickTime = 0
         self.lastClickButton = nil
         return
     end
 
     local now = GetTime()
+
+    -- A cast binding was just armed by this same physical click (duplicate event) - leave it alone
+    if self.secureButtonArmedTime and (now - self.secureButtonArmedTime) < 0.10 then
+        self:Debug("  ignored: duplicate event for the click that just armed the cast")
+        return
+    end
+
     local timeDiff = now - (self.lastClickTime or 0)
     local maxWait = OneFishDB.doubleClickSpeed or 0.40
 
     -- Ignore duplicate events from the same physical click within 30ms (e.g. GLOBAL_MOUSE_DOWN + WorldFrame)
     if (self.lastClickButton == button) and (timeDiff < 0.03) then
+        self:Debug("  ignored: duplicate event for the same click")
         return
     end
 
     if (self.lastClickButton == button) and (timeDiff >= 0.03) and (timeDiff <= maxWait) then
         -- DOUBLE-CLICK DETECTED!
+        self:Debug(string.format("  DOUBLE-CLICK detected (%.2fs apart) - arming cast", timeDiff))
         self.lastClickTime = 0
         self.lastClickButton = nil
 
@@ -591,6 +635,11 @@ function OneFish:HandleMouseDown(button)
         self:ArmDoubleCast(button)
     else
         -- First click
+        if self.lastClickButton == button then
+            self:Debug(string.format("  first click (previous was %.2fs ago, window is %.2fs)", timeDiff, maxWait))
+        else
+            self:Debug("  first click")
+        end
         self.lastClickTime = now
         self.lastClickButton = button
 
@@ -641,22 +690,30 @@ end
 -------------------------------------------------------------------------------
 
 function OneFish:HookMouseEvents(f)
-    -- 1. Modern WoW global mouse events
-    pcall(function() f:RegisterEvent("GLOBAL_MOUSE_DOWN") end)
+    -- 1. Modern WoW global mouse events (preferred - WorldFrame no longer receives 3D-world clicks)
+    local ok = pcall(function() f:RegisterEvent("GLOBAL_MOUSE_DOWN") end)
+    if ok and f.IsEventRegistered and f:IsEventRegistered("GLOBAL_MOUSE_DOWN") then
+        self.mouseSource = "GLOBAL_MOUSE_DOWN"
+        return
+    end
 
-    -- 2. Fallback WorldFrame hooks (Classic 1.12 / older clients)
+    -- 2. Fallback WorldFrame hooks (Classic 1.12 / older clients). Only one source is used so a
+    --    single physical click is never processed twice.
     if WorldFrame then
         if WorldFrame.HookScript then
             WorldFrame:HookScript("OnMouseDown", function(_, button)
-                OneFish:HandleMouseDown(button)
+                OneFish:HandleMouseDown(button, "WorldFrame")
             end)
         else
             local origMouseDown = WorldFrame:GetScript("OnMouseDown")
             WorldFrame:SetScript("OnMouseDown", function()
                 if origMouseDown then origMouseDown() end
-                OneFish:HandleMouseDown(arg1 or "RightButton")
+                OneFish:HandleMouseDown(arg1 or "RightButton", "WorldFrame")
             end)
         end
+        self.mouseSource = "WorldFrame"
+    else
+        self.mouseSource = "none"
     end
 end
 
@@ -678,6 +735,10 @@ eventFrame:RegisterEvent("LOOT_OPENED")
 eventFrame:RegisterEvent("SPELLS_CHANGED")
 pcall(function() eventFrame:RegisterEvent("BAG_UPDATE_DELAYED") end)
 pcall(function() eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED") end)
+-- Cast diagnostics (only reported while /of debug is on)
+pcall(function() eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START") end)
+pcall(function() eventFrame:RegisterEvent("UNIT_SPELLCAST_FAILED") end)
+pcall(function() eventFrame:RegisterEvent("UI_ERROR_MESSAGE") end)
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     local arg1 = ...
@@ -693,7 +754,20 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "GLOBAL_MOUSE_DOWN" then
-        OneFish:HandleMouseDown(arg1)
+        OneFish:HandleMouseDown(arg1, "GLOBAL_MOUSE_DOWN")
+
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_FAILED" then
+        if OneFish.debugMode and arg1 == "player" then
+            local spellID = select(3, ...)
+            local name = spellID and C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spellID) or tostring(spellID)
+            OneFish:Debug((event == "UNIT_SPELLCAST_FAILED" and "Cast FAILED: " or "Cast started: ") .. tostring(name))
+        end
+
+    elseif event == "UI_ERROR_MESSAGE" then
+        if OneFish.debugMode then
+            local _, message = ...
+            OneFish:Debug("Game error: " .. tostring(message or arg1))
+        end
 
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         OneFish:InitDB()
@@ -744,25 +818,59 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     end
 end)
 
--------------------------------------------------------------------------------
--- Debug Status Inspector (/of status)
--------------------------------------------------------------------------------
+--- Always-visible chat line (ignores the "Show chat messages" setting)
+local function StatusLine(msg)
+    if DEFAULT_CHAT_FRAME then
+        DEFAULT_CHAT_FRAME:AddMessage(msg)
+    else
+        print(msg)
+    end
+end
+
+local function YesNo(v)
+    return v and "|cff00ff00Yes|r" or "|cffff0000No|r"
+end
+
+--- Short one-line status used by the options panel
+function OneFish:GetStatusSummary()
+    if not OneFishDB or not OneFishDB.enabled then
+        return "|cff888888Fishing Mode: Addon disabled|r"
+    end
+    local isPole, _, name = self:IsFishingPoleEquipped()
+    if self.isFishingMode and isPole then
+        return "Fishing Mode: |cff00ff00Active|r  (" .. tostring(name) .. ")"
+    elseif isPole then
+        return "Fishing Mode: |cffffd100Pole detected, mode not active|r"
+    end
+    return "Fishing Mode: |cffff0000Inactive|r  (no fishing pole equipped)"
+end
 
 function OneFish:PrintStatus()
     local isPole, link, name, slot = self:IsFishingPoleEquipped()
     local _, spellName = self:GetFishingSpellInfo()
-    self:Print("--- Diagnostic Status ---")
-    print("  Addon Enabled: " .. (OneFishDB.enabled and "|cff00ff00Yes|r" or "|cffff0000No|r"))
-    print("  Double-Click Cast: " .. (OneFishDB.doubleClickCast and "|cff00ff00Yes|r" or "|cffff0000No|r"))
-    print("  Trigger Button: |cff00ccff" .. (OneFishDB.mouseButton or "RightButton") .. "|r")
-    print("  Fishing Mode Active: " .. (self.isFishingMode and "|cff00ff00Yes|r" or "|cffff0000No|r"))
-    print("  Equipped Pole: " .. (isPole and ("|cff00ff00" .. tostring(name) .. "|r (Slot " .. tostring(slot) .. ")") or "|cffff0000None detected|r"))
-    if not isPole then
-        local slot16 = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
-        local id16 = GetInventoryItemID and GetInventoryItemID("player", slot16)
-        local link16 = GetInventoryItemLink("player", slot16)
-        print("  MainHand (Slot 16): Link=" .. tostring(link16 or "None") .. ", ItemID=" .. tostring(id16 or "None"))
+
+    StatusLine("|cff00ccff[OneFish]|r --- Diagnostic Status ---")
+    StatusLine("  Addon Enabled: " .. YesNo(OneFishDB.enabled))
+    StatusLine("  Double-Click Cast: " .. YesNo(OneFishDB.doubleClickCast))
+    StatusLine("  Trigger Button: |cff00ccff" .. (OneFishDB.mouseButton or "RightButton") .. "|r")
+    StatusLine("  Click Source: |cff00ccff" .. tostring(self.mouseSource or "not hooked") .. "|r")
+    StatusLine("  Secure Button: " .. YesNo(self.secureButton ~= nil))
+    StatusLine("  Fishing Mode Active: " .. YesNo(self.isFishingMode))
+    StatusLine("  Equipped Pole: " .. (isPole and ("|cff00ff00" .. tostring(name) .. "|r (Slot " .. tostring(slot) .. ")") or "|cffff0000None detected|r"))
+
+    local slot16 = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
+    local id16 = GetInventoryItemID and GetInventoryItemID("player", slot16)
+    local subInfo = "?"
+    local getInstant = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if id16 and getInstant then
+        local ok, _, _, itemSubType, _, _, classID, subClassID = pcall(getInstant, id16)
+        if ok then
+            subInfo = tostring(itemSubType) .. " (class " .. tostring(classID) .. ", subclass " .. tostring(subClassID) .. ")"
+        end
     end
-    print("  Detected Spell: |cff00ccff" .. tostring(spellName) .. "|r")
-    print("  Double-Click Window: |cff00ccff" .. tostring(OneFishDB.doubleClickSpeed or 0.40) .. "s|r")
+    StatusLine("  MainHand: ItemID=" .. tostring(id16 or "None") .. ", Type=" .. subInfo)
+
+    StatusLine("  Fishing Spell: |cff00ccff" .. tostring(spellName) .. "|r")
+    StatusLine("  Double-Click Window: |cff00ccff" .. tostring(OneFishDB.doubleClickSpeed or 0.40) .. "s|r")
+    StatusLine("  Debug Trace: " .. YesNo(self.debugMode) .. "  (toggle with /of debug)")
 end

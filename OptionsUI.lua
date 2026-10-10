@@ -186,6 +186,10 @@ local function GetOrCreateUIContent()
         function(val) OneFishDB.enabled = val; OneFish:UpdateFishingMode(); OneFish:RefreshUI() end
     )
 
+    -- Live fishing mode status line
+    frame.lblStatus = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.lblStatus:SetJustifyH("LEFT")
+
     -- 2. Section: Core Mechanics
     MakeSectionHeader("mechanics", "Core Casting Engine")
 
@@ -316,7 +320,14 @@ function OneFish:RefreshUI()
     frame.cbEnable:ClearAllPoints()
     frame.cbEnable:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 15, yOfs)
     frame.cbEnable:SetChecked(OneFishDB.enabled ~= false)
-    yOfs = yOfs - 32
+    yOfs = yOfs - 30
+
+    if frame.lblStatus then
+        frame.lblStatus:ClearAllPoints()
+        frame.lblStatus:SetPoint("TOPLEFT", frame.content, "TOPLEFT", 42, yOfs)
+        frame.lblStatus:SetText(OneFish.GetStatusSummary and OneFish:GetStatusSummary() or "")
+        yOfs = yOfs - 24
+    end
 
     local function LayoutSection(secKey, titleText, isFirst)
         local isCollapsed = OneFishDB.collapsedSections[secKey] or false
@@ -734,9 +745,20 @@ SlashCmdList["ONEFISH"] = function(msg)
         OneFish:Print("Fast Auto-Loot " .. (OneFishDB.autoLoot and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"))
         OneFish:RefreshUI()
 
+    elseif cmd == "status" then
+        OneFish:PrintStatus()
+
+    elseif cmd == "debug" then
+        OneFish.debugMode = not OneFish.debugMode
+        if DEFAULT_CHAT_FRAME then
+            DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff[OneFish]|r Debug trace " .. (OneFish.debugMode and "|cff00ff00ON|r - double-click in the water and watch chat." or "|cffff0000OFF|r"))
+        end
+
     elseif cmd == "help" then
         OneFish:Print("Command List:")
         print("  |cff00ccff/of|r or |cff00ccff/onefish|r - Open / toggle settings window")
+        print("  |cff00ccff/of status|r - Print diagnostic status (pole, spell, fishing mode)")
+        print("  |cff00ccff/of debug|r - Toggle click/cast debug trace in chat")
         print("  |cff00ccff/of toggle|r - Toggle OneFish on/off")
         print("  |cff00ccff/of button|r - Cycle click button (Right, Left, Either)")
         print("  |cff00ccff/of lure|r - Toggle smart auto-lure")
