@@ -1,0 +1,13 @@
+## Interface: 16001, 11200, 20400, 30300, 110000
+## Title: OneFish
+## Notes: Lightweight enhanced fishing addon with double-click casting, auto-lures, audio boosting, and fast looting.
+## Author: Antigravity
+## Version: 1.0.0
+## IconTexture: Interface\Icons\Trade_Fishing
+## SavedVariables: OneFishDB
+## OptionalDeps: OneSwatter, OnePanelUtils
+
+Core.lua
+Lures.lua
+Audio.lua
+OptionsUI.lua
