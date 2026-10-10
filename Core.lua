@@ -4,7 +4,7 @@
     Features:
       - Double-click to cast (Right-click, Left-click, or Either button)
       - Instant arming on second click with secure execution across all client versions
-      - Auto-detection of equipped fishing poles
+      - Universal pole detection supporting MainHand (slot 16) and Profession Tool (slot 28)
       - Bobber protection (reels in without re-casting)
       - Click-to-Move suppression while fishing
       - Fast Auto-Looting for fishing catches
@@ -28,6 +28,7 @@ OneFish.lastClickButton = nil
 OneFish.cachedFishingSpellIndex = nil
 OneFish.cachedFishingSpellName = nil
 OneFish.savedClickToMove = nil
+OneFish.secureButtonArmedTime = nil
 
 -- Default Configuration
 OneFish.defaults = {
@@ -90,7 +91,7 @@ function OneFish:Print(msg)
 end
 
 -------------------------------------------------------------------------------
--- Helper: Safe Item ID from Link
+-- Helper Utilities
 -------------------------------------------------------------------------------
 
 local function GetItemIDFromLink(itemLink)
@@ -99,94 +100,159 @@ local function GetItemIDFromLink(itemLink)
     return tonumber(itemID)
 end
 
+function OneFish:GetItemNameFromLink(link)
+    if not link then return "Fishing Pole" end
+    local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    if getItemInfo then
+        local ok, name = pcall(getItemInfo, link)
+        if ok and name and name ~= "" then return name end
+    end
+    local _, _, bracketName = string.find(link, "%[(.-)%]")
+    if bracketName and bracketName ~= "" then
+        return bracketName
+    end
+    return "Fishing Pole"
+end
+
 -------------------------------------------------------------------------------
--- Fishing Pole Identification
+-- Fishing Pole Identification (Universal Multi-Client)
 -------------------------------------------------------------------------------
 
--- Comprehensive list of known fishing poles (Vanilla, Turtle WoW, TBC, WotLK)
+-- Comprehensive list of known fishing poles across all WoW eras
 OneFish.POLE_IDS = {
-    [6256]  = true, -- Fishing Pole
-    [6365]  = true, -- Strong Fishing Pole
-    [6366]  = true, -- Darkwood Fishing Pole
-    [6367]  = true, -- Big Iron Fishing Pole
-    [12225] = true, -- Blump Family Fishing Pole
-    [19022] = true, -- Nat Pagle's Extreme Angler FC-5000
-    [19970] = true, -- Arcanite Fishing Pole
-    [25924] = true, -- Mastercraft Kalu'ak Fishing Pole (TBC/WotLK)
-    [44050] = true, -- Mastercraft Kalu'ak Fishing Pole
-    [45858] = true, -- Nat's Lucky Fishing Pole
-    [45991] = true, -- Bone Fishing Pole
-    [45992] = true, -- Jeweled Fishing Pole
-    [46337] = true, -- Dragon Fishing Pole
-    [81001] = true, -- Bamboo Fishing Pole (Turtle WoW)
-    [81002] = true, -- Reinforced Fishing Pole (Turtle WoW)
+    [6256]   = true, -- Fishing Pole
+    [6365]   = true, -- Strong Fishing Pole
+    [6366]   = true, -- Darkwood Fishing Pole
+    [6367]   = true, -- Big Iron Fishing Pole
+    [12225]  = true, -- Blump Family Fishing Pole
+    [19022]  = true, -- Nat Pagle's Extreme Angler FC-5000
+    [19970]  = true, -- Arcanite Fishing Pole
+    [25924]  = true, -- Mastercraft Kalu'ak Fishing Pole
+    [25978]  = true, -- Seth's Graphite Fishing Pole
+    [44050]  = true, -- Mastercraft Kalu'ak Fishing Pole
+    [45858]  = true, -- Nat's Lucky Fishing Pole
+    [45991]  = true, -- Bone Fishing Pole
+    [45992]  = true, -- Jeweled Fishing Pole
+    [46337]  = true, -- Dragon Fishing Pole
+    [81001]  = true, -- Bamboo Fishing Pole (Turtle WoW)
+    [81002]  = true, -- Reinforced Fishing Pole (Turtle WoW)
+    [133755] = true, -- Underlight Angler (Legion)
+    [198288] = true, -- Khaz'gorite Fishing Pole (Dragonflight)
+    [224522] = true, -- Algari Fishing Pole (The War Within)
+    [224523] = true, -- Weaver's Fishing Pole
+    [224524] = true, -- Artisan's Fishing Pole
 }
 
---- Checks whether the player currently has a fishing pole equipped in the main hand (Slot 16)
--- @return boolean, string|nil (link), string|nil (name)
-function OneFish:IsFishingPoleEquipped()
-    local slotID = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
-    local itemLink = GetInventoryItemLink("player", slotID)
-    
-    if not itemLink then
-        return false, nil, nil
-    end
+--- Tests if a specific itemLink/itemID is a fishing pole across 6 robust detection layers
+function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
+    if not itemLink and not itemID then return false end
 
-    local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+    itemID = itemID or GetItemIDFromLink(itemLink)
 
-    -- 1. Check Item ID against known poles
-    local itemID = GetItemIDFromLink(itemLink)
+    -- 1. Check known item ID list
     if itemID and self.POLE_IDS[itemID] then
-        local itemName = getItemInfo and getItemInfo(itemLink) or "Fishing Pole"
-        return true, itemLink, itemName
+        return true
     end
 
-    -- 2. Inspect item subtype via GetItemInfo
+    -- 2. C_Item.GetItemInfoInstant (subClassID 20 = Fishing Pole, instant synchronous check)
+    local getInstant = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+    if getInstant then
+        local target = itemID or itemLink
+        local ok, _, _, _, _, _, classID, subClassID = pcall(getInstant, target)
+        if ok and (subClassID == 20 or (Enum and Enum.ItemWeaponSubclass and subClassID == Enum.ItemWeaponSubclass.FishingPole)) then
+            return true
+        end
+    end
+
+    -- 3. GetItemInfo (itemSubType match)
+    local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
     if getItemInfo then
-        local itemName, _, _, _, _, itemType, itemSubType = getItemInfo(itemLink)
-        if itemSubType and (
-            itemSubType == "Fishing Poles" or 
-            itemSubType == "Fishing Pole" or 
-            string.find(string.lower(itemSubType), "fish")
-        ) then
-            return true, itemLink, itemName
+        local target = itemID or itemLink
+        local ok, _, _, _, _, _, _, itemSubType = pcall(getItemInfo, target)
+        if ok and itemSubType then
+            local lower = string.lower(itemSubType)
+            if string.find(lower, "fish") or string.find(lower, "angel") or string.find(lower, "pêche") or string.find(lower, "peche") or string.find(lower, "pesca") then
+                return true
+            end
         end
     end
 
-    -- 3. Texture check (match standard Blizzard fishing pole icon)
-    local texture = GetInventoryItemTexture("player", slotID)
-    if texture then
-        local lowerTex = string.lower(texture)
-        if string.find(lowerTex, "inv_fishingpole") or string.find(lowerTex, "trade_fishing") then
-            -- Exclude known non-pole weapon with fishing texture (Nat Pagle's Fish Terminator - 19944)
+    -- 4. Modern C_TooltipInfo scan
+    if C_TooltipInfo and C_TooltipInfo.GetInventoryItem and slotID then
+        local ok, data = pcall(C_TooltipInfo.GetInventoryItem, "player", slotID)
+        if ok and data and data.lines then
+            for _, line in ipairs(data.lines) do
+                if line.leftText then
+                    local lower = string.lower(line.leftText)
+                    if string.find(lower, "fishing pole") or string.find(lower, "requires fishing") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    -- 5. Legacy Tooltip Scan (Classic / Vanilla 1.12)
+    if slotID then
+        if not self.scanTooltip then
+            self.scanTooltip = CreateFrame("GameTooltip", "OneFishScanTooltip", UIParent, "GameTooltipTemplate")
+            self.scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        end
+        self.scanTooltip:ClearLines()
+        local ok = pcall(self.scanTooltip.SetInventoryItem, self.scanTooltip, "player", slotID)
+        if ok then
+            for i = 1, self.scanTooltip:NumLines() do
+                local line = _G["OneFishScanTooltipTextLeft" .. i]
+                local text = line and line:GetText()
+                if text then
+                    local lower = string.lower(text)
+                    if string.find(lower, "fishing pole") or string.find(lower, "requires fishing") then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    -- 6. Item Name Fallback
+    local itemName = self:GetItemNameFromLink(itemLink)
+    if itemName then
+        local lowerName = string.lower(itemName)
+        if string.find(lowerName, "fishing pole") or string.find(lowerName, "angelrute") or string.find(lowerName, "canne à pêche") then
+            -- Exclude non-pole weapon with fishing in name (Nat Pagle's Fish Terminator - 19944)
             if itemID ~= 19944 then
-                local itemName = getItemInfo and getItemInfo(itemLink) or "Fishing Pole"
-                return true, itemLink, itemName
+                return true
             end
         end
     end
 
-    -- 4. Tooltip fallback check
-    if not self.scanTooltip then
-        self.scanTooltip = CreateFrame("GameTooltip", "OneFishScanTooltip", UIParent, "GameTooltipTemplate")
-        self.scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    return false
+end
+
+--- Checks whether the player currently has a fishing pole equipped (Slot 16 or Profession Tool Slot 28)
+-- @return boolean, string|nil (link), string|nil (name), number|nil (slot)
+function OneFish:IsFishingPoleEquipped()
+    -- Check MainHandSlot (Slot 16)
+    local slot16 = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
+    local id16 = GetInventoryItemID and GetInventoryItemID("player", slot16)
+    local link16 = GetInventoryItemLink("player", slot16)
+    if (id16 and self.POLE_IDS[id16]) or (link16 and self:IsItemAFishingPole(link16, slot16, id16)) or (id16 and self:IsItemAFishingPole(nil, slot16, id16)) then
+        local name = self:GetItemNameFromLink(link16)
+        return true, link16, name, slot16
     end
-    self.scanTooltip:ClearLines()
-    self.scanTooltip:SetInventoryItem("player", slotID)
-    
-    for i = 1, self.scanTooltip:NumLines() do
-        local line = _G["OneFishScanTooltipTextLeft" .. i]
-        local text = line and line:GetText()
-        if text then
-            local lower = string.lower(text)
-            if string.find(lower, "fishing pole") or string.find(lower, "requires fishing") then
-                local itemName = getItemInfo and getItemInfo(itemLink) or "Fishing Pole"
-                return true, itemLink, itemName
-            end
+
+    -- Check Profession Tool Slot (Slot 28) if present in modern clients
+    local slot28 = INVSLOT_FISHING_TOOL or (GetInventorySlotInfo and GetInventorySlotInfo("FishingToolSlot")) or 28
+    if slot28 then
+        local id28 = GetInventoryItemID and GetInventoryItemID("player", slot28)
+        local link28 = GetInventoryItemLink("player", slot28)
+        if (id28 and self.POLE_IDS[id28]) or (link28 and self:IsItemAFishingPole(link28, slot28, id28)) or (id28 and self:IsItemAFishingPole(nil, slot28, id28)) then
+            local name = self:GetItemNameFromLink(link28)
+            return true, link28, name, slot28
         end
     end
 
-    return false, nil, nil
+    return false, nil, nil, nil
 end
 
 -------------------------------------------------------------------------------
@@ -196,13 +262,24 @@ end
 local FISHING_SPELL_IDS = { 131474, 7620, 7731, 7732, 18248, 33095, 51294 }
 
 --- Resolves the localized fishing spell name and spellbook index
--- Supports C_Spell (11.0 / 1.60+), GetSpellInfo, C_SpellBook, and legacy SpellBook scanning
 function OneFish:GetFishingSpellInfo()
     if self.cachedFishingSpellName then
         return self.cachedFishingSpellIndex, self.cachedFishingSpellName
     end
 
-    -- 1. Modern C_Spell API (WoW 11.0+, 1.60.1+)
+    -- 1. Modern C_Spell API (GetSpellName - WoW 11.0+, 1.60.1+)
+    if C_Spell and C_Spell.GetSpellName then
+        for _, id in ipairs(FISHING_SPELL_IDS) do
+            local ok, name = pcall(C_Spell.GetSpellName, id)
+            if ok and name and name ~= "" then
+                self.cachedFishingSpellName = name
+                self.cachedFishingSpellIndex = id
+                return id, name
+            end
+        end
+    end
+
+    -- 2. Modern C_Spell API (GetSpellInfo table - WoW 11.0+, 1.60.1+)
     if C_Spell and C_Spell.GetSpellInfo then
         for _, id in ipairs(FISHING_SPELL_IDS) do
             local ok, info = pcall(C_Spell.GetSpellInfo, id)
@@ -214,7 +291,19 @@ function OneFish:GetFishingSpellInfo()
         end
     end
 
-    -- 2. Legacy GetSpellInfo (WoW 2.0 - 10.x)
+    -- 2. Modern Profession API (GetProfessions)
+    if GetProfessions and GetProfessionInfo then
+        local ok, _, _, _, fishProf = pcall(GetProfessions)
+        if ok and fishProf then
+            local ok2, name = pcall(GetProfessionInfo, fishProf)
+            if ok2 and name and name ~= "" then
+                self.cachedFishingSpellName = name
+                return nil, name
+            end
+        end
+    end
+
+    -- 3. Legacy GetSpellInfo (WoW 2.0 - 10.x)
     if GetSpellInfo then
         for _, id in ipairs(FISHING_SPELL_IDS) do
             local ok, name = pcall(GetSpellInfo, id)
@@ -226,7 +315,7 @@ function OneFish:GetFishingSpellInfo()
         end
     end
 
-    -- 3. Modern SpellBook via C_SpellBook (WoW 11.0+, 1.60.1+)
+    -- 4. Modern SpellBook via C_SpellBook (WoW 11.0+, 1.60.1+)
     if C_SpellBook and C_SpellBook.GetSpellBookItemName then
         local bank = (Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player) or 0
         for i = 1, 100 do
@@ -242,7 +331,7 @@ function OneFish:GetFishingSpellInfo()
         end
     end
 
-    -- 4. Legacy Spellbook Scan via GetSpellName (Vanilla 1.12 / TBC / WotLK)
+    -- 5. Legacy Spellbook Scan via GetSpellName (Vanilla 1.12 / TBC / WotLK)
     if GetSpellName then
         local bookType = BOOKTYPE_SPELL or "spell"
         local numSpells = 100
@@ -269,7 +358,7 @@ function OneFish:GetFishingSpellInfo()
         end
     end
 
-    -- 5. Safe Fallback
+    -- 6. Safe Fallback
     self.cachedFishingSpellName = "Fishing"
     return nil, "Fishing"
 end
@@ -279,7 +368,6 @@ end
 -------------------------------------------------------------------------------
 
 --- Determines if the cursor is currently hovering over the fishing bobber
--- When hovering over the bobber, right-clicks should reel in / interact, not cast
 function OneFish:IsMouseOverBobber()
     if GameTooltip and GameTooltip:IsVisible() then
         local text = GameTooltipTextLeft1 and GameTooltipTextLeft1:GetText()
@@ -367,6 +455,7 @@ function OneFish:ExitFishingMode()
     if self.secureButton and ClearOverrideBindings then
         ClearOverrideBindings(self.secureButton)
     end
+    self.secureButtonArmedTime = nil
 
     -- 1. Restore Click-to-Move
     if self.savedClickToMove and SetCVar then
@@ -378,10 +467,14 @@ function OneFish:ExitFishingMode()
     if self.Audio and self.Audio.Restore then
         self.Audio:Restore()
     end
+
+    if OneFishDB.showChatMessages then
+        self:Print("Fishing mode ended.")
+    end
 end
 
 -------------------------------------------------------------------------------
--- Double-Click Arming & Execution Engine
+-- Double-Click Casting Engine
 -------------------------------------------------------------------------------
 
 --- Check whether the clicked button matches user preferences
@@ -396,20 +489,11 @@ function OneFish:IsClickButtonAllowed(button)
     end
 end
 
---- Arms and triggers casting upon detecting the second click on MouseDown
--- Arming on MouseDown guarantees that the subsequent MouseUp hardware event securely triggers the cast!
-function OneFish:PrepareAndExecuteCast(button)
-    if InCombatLockdown and InCombatLockdown() then return end
-    if not self.isFishingMode then return end
-
-    -- Stop camera mouselook if active
-    if IsMouselooking and IsMouselooking() then
-        MouselookStop()
-    end
-
+--- Arms and triggers casting upon detecting double-click
+function OneFish:ArmDoubleCast(button)
     local buttonKey = (button == "LeftButton") and "BUTTON1" or "BUTTON2"
 
-    -- 1. Check if client uses SecureActionButton (Protected clients: 1.60.1, WotLK, Modern)
+    -- 1. Protected client branch (1.60.1, WotLK, Modern)
     if InCombatLockdown ~= nil and self.secureButton then
         local appliedLure = false
 
@@ -421,6 +505,9 @@ function OneFish:PrepareAndExecuteCast(button)
                 self.secureButton:SetAttribute("type", "item")
                 self.secureButton:SetAttribute("item", bag .. " " .. slot)
                 self.secureButton:SetAttribute("target-slot", mainHandSlot)
+                if SetOverrideBindingClick then
+                    SetOverrideBindingClick(self.secureButton, true, buttonKey, "OneFishSecureButton")
+                end
                 appliedLure = true
                 OneFish:Print("Applying " .. (lureName or "lure") .. "...")
             end
@@ -430,16 +517,19 @@ function OneFish:PrepareAndExecuteCast(button)
             local _, spellName = self:GetFishingSpellInfo()
             self.secureButton:SetAttribute("type", "spell")
             self.secureButton:SetAttribute("spell", spellName or "Fishing")
+
+            if SetOverrideBindingSpell then
+                SetOverrideBindingSpell(self.secureButton, true, buttonKey, spellName or "Fishing")
+            elseif SetOverrideBindingClick then
+                SetOverrideBindingClick(self.secureButton, true, buttonKey, "OneFishSecureButton")
+            end
         end
 
-        if SetOverrideBindingClick then
-            SetOverrideBindingClick(self.secureButton, true, buttonKey, "OneFishSecureButton")
-            self.secureButtonArmedTime = GetTime()
-        end
+        self.secureButtonArmedTime = GetTime()
         return
     end
 
-    -- 2. Direct execution branch (Vanilla 1.12 / non-secure client)
+    -- 2. Non-secure client branch (Vanilla 1.12)
     if OneFishDB.autoLure and self.Lures and self.Lures.CheckAndApplyLure then
         local applied = self.Lures:CheckAndApplyLure()
         if applied then return end
@@ -453,20 +543,21 @@ function OneFish:PrepareAndExecuteCast(button)
     end
 end
 
--------------------------------------------------------------------------------
--- World Mouse Event Interception
--------------------------------------------------------------------------------
-
-function OneFish:OnWorldMouseDown(button)
-    button = button or arg1 or "RightButton"
+--- Unified Mouse Down Click Interceptor
+function OneFish:HandleMouseDown(button)
+    button = button or "RightButton"
 
     if not self:IsClickButtonAllowed(button) then return end
     if not OneFishDB or not OneFishDB.enabled or not OneFishDB.doubleClickCast then return end
     if not self.isFishingMode then return end
     if InCombatLockdown and InCombatLockdown() then return end
 
-    -- Ignore if hovering over the bobber on Right Click (player is reeling in / looting)
+    -- Ignore if hovering over bobber with Right-Click (reeling in / looting)
     if button == "RightButton" and self:IsMouseOverBobber() then
+        if self.secureButton and ClearOverrideBindings then
+            ClearOverrideBindings(self.secureButton)
+            self.secureButtonArmedTime = nil
+        end
         self.lastClickTime = 0
         self.lastClickButton = nil
         return
@@ -483,20 +574,32 @@ function OneFish:OnWorldMouseDown(button)
     local timeDiff = now - (self.lastClickTime or 0)
     local maxWait = OneFishDB.doubleClickSpeed or 0.40
 
-    if (self.lastClickButton == button) and (timeDiff > 0.05) and (timeDiff <= maxWait) then
+    -- Ignore duplicate events from the same physical click within 30ms (e.g. GLOBAL_MOUSE_DOWN + WorldFrame)
+    if (self.lastClickButton == button) and (timeDiff < 0.03) then
+        return
+    end
+
+    if (self.lastClickButton == button) and (timeDiff >= 0.03) and (timeDiff <= maxWait) then
         -- DOUBLE-CLICK DETECTED!
         self.lastClickTime = 0
         self.lastClickButton = nil
-        self:PrepareAndExecuteCast(button)
+
+        if IsMouselooking and IsMouselooking() then
+            MouselookStop()
+        end
+
+        self:ArmDoubleCast(button)
     else
         -- First click
         self.lastClickTime = now
         self.lastClickButton = button
-    end
-end
 
-function OneFish:OnWorldMouseUp(button)
-    -- MouseUp is handled natively by the secure action button binding armed on MouseDown
+        -- Clear any previous override binding from past clicks
+        if self.secureButton and ClearOverrideBindings then
+            ClearOverrideBindings(self.secureButton)
+            self.secureButtonArmedTime = nil
+        end
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -509,18 +612,19 @@ function OneFish:SetupSecureButton()
     local btn = CreateFrame("Button", "OneFishSecureButton", UIParent, "SecureActionButtonTemplate")
     btn:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
     btn:SetSize(1, 1)
-    btn:RegisterForClicks("RightButtonUp", "LeftButtonUp")
+    btn:RegisterForClicks("AnyUp", "AnyDown")
     
     btn:SetScript("PostClick", function(self)
         if ClearOverrideBindings then
             ClearOverrideBindings(self)
         end
+        OneFish.secureButtonArmedTime = nil
     end)
 
-    -- Auto-clear override binding timeout (if player didn't complete click)
+    -- Auto-clear override binding timeout after 1.2s if click wasn't completed
     btn:SetScript("OnUpdate", function(self, elapsed)
         if OneFish.secureButtonArmedTime then
-            if (GetTime() - OneFish.secureButtonArmedTime) > 0.8 then
+            if (GetTime() - OneFish.secureButtonArmedTime) > 1.2 then
                 if ClearOverrideBindings then
                     ClearOverrideBindings(self)
                 end
@@ -533,22 +637,26 @@ function OneFish:SetupSecureButton()
 end
 
 -------------------------------------------------------------------------------
--- WorldFrame Interception Hook
+-- Mouse Event Hooking (GLOBAL_MOUSE_DOWN + WorldFrame)
 -------------------------------------------------------------------------------
 
-function OneFish:HookWorldFrame()
-    if not WorldFrame then return end
+function OneFish:HookMouseEvents(f)
+    -- 1. Modern WoW global mouse events
+    pcall(function() f:RegisterEvent("GLOBAL_MOUSE_DOWN") end)
 
-    if WorldFrame.HookScript then
-        WorldFrame:HookScript("OnMouseDown", function(_, button)
-            OneFish:OnWorldMouseDown(button)
-        end)
-    else
-        local origMouseDown = WorldFrame:GetScript("OnMouseDown")
-        WorldFrame:SetScript("OnMouseDown", function()
-            if origMouseDown then origMouseDown() end
-            OneFish:OnWorldMouseDown(arg1 or "RightButton")
-        end)
+    -- 2. Fallback WorldFrame hooks (Classic 1.12 / older clients)
+    if WorldFrame then
+        if WorldFrame.HookScript then
+            WorldFrame:HookScript("OnMouseDown", function(_, button)
+                OneFish:HandleMouseDown(button)
+            end)
+        else
+            local origMouseDown = WorldFrame:GetScript("OnMouseDown")
+            WorldFrame:SetScript("OnMouseDown", function()
+                if origMouseDown then origMouseDown() end
+                OneFish:HandleMouseDown(arg1 or "RightButton")
+            end)
+        end
     end
 end
 
@@ -568,6 +676,8 @@ eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("LOOT_OPENED")
 eventFrame:RegisterEvent("SPELLS_CHANGED")
+pcall(function() eventFrame:RegisterEvent("BAG_UPDATE_DELAYED") end)
+pcall(function() eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED") end)
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     local arg1 = ...
@@ -575,12 +685,15 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ADDON_LOADED" and arg1 == addonName then
         OneFish:InitDB()
         OneFish:SetupSecureButton()
-        OneFish:HookWorldFrame()
+        OneFish:HookMouseEvents(self)
 
         -- Register with OneSwatter if present
         if _G.OneSwatter and _G.OneSwatter.RegisterAddon then
             _G.OneSwatter:RegisterAddon("OneFish")
         end
+
+    elseif event == "GLOBAL_MOUSE_DOWN" then
+        OneFish:HandleMouseDown(arg1)
 
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         OneFish:InitDB()
@@ -592,7 +705,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             OneFish:UpdateFishingMode()
         end
 
-    elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "ITEM_LOCK_CHANGED" then
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" or event == "ITEM_LOCK_CHANGED" or event == "BAG_UPDATE_DELAYED" or event == "GET_ITEM_INFO_RECEIVED" then
         OneFish:UpdateFishingMode()
 
     elseif event == "PLAYER_REGEN_DISABLED" then
@@ -603,6 +716,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         if OneFish.secureButton and ClearOverrideBindings then
             ClearOverrideBindings(OneFish.secureButton)
         end
+        OneFish.secureButtonArmedTime = nil
 
     elseif event == "PLAYER_REGEN_ENABLED" then
         OneFish:UpdateFishingMode()
@@ -629,3 +743,26 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         end
     end
 end)
+
+-------------------------------------------------------------------------------
+-- Debug Status Inspector (/of status)
+-------------------------------------------------------------------------------
+
+function OneFish:PrintStatus()
+    local isPole, link, name, slot = self:IsFishingPoleEquipped()
+    local _, spellName = self:GetFishingSpellInfo()
+    self:Print("--- Diagnostic Status ---")
+    print("  Addon Enabled: " .. (OneFishDB.enabled and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+    print("  Double-Click Cast: " .. (OneFishDB.doubleClickCast and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+    print("  Trigger Button: |cff00ccff" .. (OneFishDB.mouseButton or "RightButton") .. "|r")
+    print("  Fishing Mode Active: " .. (self.isFishingMode and "|cff00ff00Yes|r" or "|cffff0000No|r"))
+    print("  Equipped Pole: " .. (isPole and ("|cff00ff00" .. tostring(name) .. "|r (Slot " .. tostring(slot) .. ")") or "|cffff0000None detected|r"))
+    if not isPole then
+        local slot16 = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
+        local id16 = GetInventoryItemID and GetInventoryItemID("player", slot16)
+        local link16 = GetInventoryItemLink("player", slot16)
+        print("  MainHand (Slot 16): Link=" .. tostring(link16 or "None") .. ", ItemID=" .. tostring(id16 or "None"))
+    end
+    print("  Detected Spell: |cff00ccff" .. tostring(spellName) .. "|r")
+    print("  Double-Click Window: |cff00ccff" .. tostring(OneFishDB.doubleClickSpeed or 0.40) .. "s|r")
+end
