@@ -298,10 +298,10 @@ local function GetOrCreateUIContent()
     MakeSectionHeader("general", "General & Notifications")
 
     frame.cbChat = CreateCheckbox(content, "Show Chat Notifications",
-        function() return OneFishDB.showChatMessages ~= false end,
+        function() return OneFishDB.showChatMessages == true end,
         function(val) OneFishDB.showChatMessages = val end
     )
-    frame.lblChatDesc = CreateSubLabel(content, "Prints status notifications in chat when fishing mode starts, stops, or lures are applied.", true)
+    frame.lblChatDesc = CreateSubLabel(content, "Prints chat notifications when equipping a pole, unequipping, or applying lures.", true)
 
     return content
 end
@@ -715,7 +715,7 @@ SlashCmdList["ONEFISH"] = function(msg)
     elseif cmd == "toggle" then
         OneFishDB.enabled = not OneFishDB.enabled
         OneFish:UpdateFishingMode()
-        OneFish:Print("Addon " .. (OneFishDB.enabled and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"))
+        OneFish:Print("Addon " .. (OneFishDB.enabled and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"), true)
         OneFish:RefreshUI()
 
     elseif cmd == "button" or cmd == "click" then
@@ -727,22 +727,22 @@ SlashCmdList["ONEFISH"] = function(msg)
         else
             OneFishDB.mouseButton = "RightButton"
         end
-        OneFish:Print("Double-Click Button: |cff00ccff" .. OneFishDB.mouseButton .. "|r")
+        OneFish:Print("Double-Click Button: |cff00ccff" .. OneFishDB.mouseButton .. "|r", true)
         OneFish:RefreshUI()
 
     elseif cmd == "lure" then
         OneFishDB.autoLure = not OneFishDB.autoLure
-        OneFish:Print("Auto-Lure " .. (OneFishDB.autoLure and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"))
+        OneFish:Print("Auto-Lure " .. (OneFishDB.autoLure and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"), true)
         OneFish:RefreshUI()
 
     elseif cmd == "sound" or cmd == "audio" then
         OneFishDB.enhanceAudio = not OneFishDB.enhanceAudio
-        OneFish:Print("Audio Enhancement " .. (OneFishDB.enhanceAudio and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"))
+        OneFish:Print("Audio Enhancement " .. (OneFishDB.enhanceAudio and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"), true)
         OneFish:RefreshUI()
 
     elseif cmd == "loot" then
         OneFishDB.autoLoot = not OneFishDB.autoLoot
-        OneFish:Print("Fast Auto-Loot " .. (OneFishDB.autoLoot and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"))
+        OneFish:Print("Fast Auto-Loot " .. (OneFishDB.autoLoot and "|cff00ff00Enabled|r" or "|cffff0000Disabled|r"), true)
         OneFish:RefreshUI()
 
     elseif cmd == "status" then
@@ -755,7 +755,7 @@ SlashCmdList["ONEFISH"] = function(msg)
         end
 
     elseif cmd == "help" then
-        OneFish:Print("Command List:")
+        OneFish:Print("Command List:", true)
         print("  |cff00ccff/of|r or |cff00ccff/onefish|r - Open / toggle settings window")
         print("  |cff00ccff/of status|r - Print diagnostic status (pole, spell, fishing mode)")
         print("  |cff00ccff/of debug|r - Toggle click/cast debug trace in chat")

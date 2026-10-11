@@ -44,7 +44,7 @@ OneFish.defaults = {
     muteAmbience = false,        -- Mute ambient environment sounds while fishing
     autoLoot = true,             -- Automatically loot fishing catches
     disableClickToMove = true,   -- Suppress Click-To-Move while fishing to prevent unwanted walking
-    showChatMessages = true,     -- Show status messages in chat
+    showChatMessages = false,    -- Show status messages in chat (disabled by default to keep chat clean)
     collapsedSections = {
         mechanics = false,
         lures = false,
@@ -80,8 +80,8 @@ function OneFish:InitDB()
     end
 end
 
-function OneFish:Print(msg)
-    if OneFishDB and not OneFishDB.showChatMessages then return end
+function OneFish:Print(msg, force)
+    if not force and OneFishDB and not OneFishDB.showChatMessages then return end
     local prefix = "|cff00ccff[OneFish]|r "
     if DEFAULT_CHAT_FRAME then
         DEFAULT_CHAT_FRAME:AddMessage(prefix .. tostring(msg))
@@ -159,8 +159,10 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
     if getInstant then
         local target = itemID or itemLink
         local ok, _, _, _, _, _, classID, subClassID = pcall(getInstant, target)
-        if ok and (subClassID == 20 or (Enum and Enum.ItemWeaponSubclass and subClassID == Enum.ItemWeaponSubclass.FishingPole)) then
-            return true
+        if ok and (classID == 2 or (Enum and Enum.ItemClass and classID == Enum.ItemClass.Weapon)) then
+            if subClassID == 20 or (Enum and Enum.ItemWeaponSubclass and subClassID == Enum.ItemWeaponSubclass.FishingPole) then
+                return true
+            end
         end
     end
 
@@ -168,10 +170,10 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
     local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
     if getItemInfo then
         local target = itemID or itemLink
-        local ok, _, _, _, _, _, _, itemSubType = pcall(getItemInfo, target)
+        local ok, _, _, _, _, itemType, itemSubType = pcall(getItemInfo, target)
         if ok and itemSubType then
             local lower = string.lower(itemSubType)
-            if string.find(lower, "fish") or string.find(lower, "angel") or string.find(lower, "pêche") or string.find(lower, "peche") or string.find(lower, "pesca") then
+            if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "peche") or string.find(lower, "pesca") then
                 return true
             end
         end
@@ -236,19 +238,29 @@ function OneFish:IsFishingPoleEquipped()
     local slot16 = GetInventorySlotInfo and GetInventorySlotInfo("MainHandSlot") or 16
     local id16 = GetInventoryItemID and GetInventoryItemID("player", slot16)
     local link16 = GetInventoryItemLink("player", slot16)
-    if (id16 and self.POLE_IDS[id16]) or (link16 and self:IsItemAFishingPole(link16, slot16, id16)) or (id16 and self:IsItemAFishingPole(nil, slot16, id16)) then
-        local name = self:GetItemNameFromLink(link16)
-        return true, link16, name, slot16
+
+    -- If there is an item in Main Hand, verify if it is a fishing pole
+    if id16 or link16 then
+        if (id16 and self.POLE_IDS[id16]) or self:IsItemAFishingPole(link16, slot16, id16) then
+            local name = self:GetItemNameFromLink(link16)
+            return true, link16, name, slot16
+        else
+            -- Non-fishing weapon/item is actively equipped in Main Hand.
+            -- Player is holding combat gear, NOT fishing gear.
+            return false, nil, nil, nil
+        end
     end
 
-    -- Check Profession Tool Slot (Slot 28) if present in modern clients
-    local slot28 = INVSLOT_FISHING_TOOL or (GetInventorySlotInfo and GetInventorySlotInfo("FishingToolSlot")) or 28
-    if slot28 then
-        local id28 = GetInventoryItemID and GetInventoryItemID("player", slot28)
-        local link28 = GetInventoryItemLink("player", slot28)
-        if (id28 and self.POLE_IDS[id28]) or (link28 and self:IsItemAFishingPole(link28, slot28, id28)) or (id28 and self:IsItemAFishingPole(nil, slot28, id28)) then
-            local name = self:GetItemNameFromLink(link28)
-            return true, link28, name, slot28
+    -- If Main Hand is empty, check modern profession Fishing Tool slot (if supported by client)
+    local toolSlot = INVSLOT_FISHING_TOOL or (GetInventorySlotInfo and GetInventorySlotInfo("FishingToolSlot"))
+    if toolSlot then
+        local idTool = GetInventoryItemID and GetInventoryItemID("player", toolSlot)
+        local linkTool = GetInventoryItemLink("player", toolSlot)
+        if idTool or linkTool then
+            if (idTool and self.POLE_IDS[idTool]) or self:IsItemAFishingPole(linkTool, toolSlot, idTool) then
+                local name = self:GetItemNameFromLink(linkTool)
+                return true, linkTool, name, toolSlot
+            end
         end
     end
 
@@ -401,10 +413,10 @@ end
 -- Fishing Mode Coordinator
 -------------------------------------------------------------------------------
 
-function OneFish:UpdateFishingMode()
+function OneFish:UpdateFishingMode(isSilent)
     if not OneFishDB or not OneFishDB.enabled then
         if self.isFishingMode then
-            self:ExitFishingMode()
+            self:ExitFishingMode(isSilent)
         end
         return
     end
@@ -412,7 +424,7 @@ function OneFish:UpdateFishingMode()
     -- Do not alter fishing mode while in combat
     if InCombatLockdown and InCombatLockdown() then
         if self.isFishingMode then
-            self:ExitFishingMode()
+            self:ExitFishingMode(true)
         end
         return
     end
@@ -420,15 +432,15 @@ function OneFish:UpdateFishingMode()
     local isPole, _, poleName = self:IsFishingPoleEquipped()
 
     if isPole and not self.isFishingMode then
-        self:EnterFishingMode(poleName)
+        self:EnterFishingMode(poleName, isSilent)
         self:RefreshUI()
     elseif not isPole and self.isFishingMode then
-        self:ExitFishingMode()
+        self:ExitFishingMode(isSilent)
         self:RefreshUI()
     end
 end
 
-function OneFish:EnterFishingMode(poleName)
+function OneFish:EnterFishingMode(poleName, isSilent)
     self.isFishingMode = true
 
     -- 1. Click-to-Move Suppression
@@ -445,12 +457,12 @@ function OneFish:EnterFishingMode(poleName)
         self.Audio:Boost()
     end
 
-    if OneFishDB.showChatMessages and poleName then
+    if not isSilent and OneFishDB.showChatMessages and poleName then
         self:Print("Fishing mode active (" .. poleName .. ")")
     end
 end
 
-function OneFish:ExitFishingMode()
+function OneFish:ExitFishingMode(isSilent)
     self.isFishingMode = false
 
     -- Clear any pending secure bindings
@@ -470,7 +482,7 @@ function OneFish:ExitFishingMode()
         self.Audio:Restore()
     end
 
-    if OneFishDB.showChatMessages then
+    if not isSilent and OneFishDB.showChatMessages then
         self:Print("Fishing mode ended.")
     end
 end
@@ -772,7 +784,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         OneFish:InitDB()
         OneFish.isInitialized = true
-        OneFish:UpdateFishingMode()
+        OneFish:UpdateFishingMode(true)
 
     elseif event == "UNIT_INVENTORY_CHANGED" then
         if arg1 == "player" then
@@ -783,9 +795,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         OneFish:UpdateFishingMode()
 
     elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Drop fishing mode & clear bindings upon entering combat
+        -- Drop fishing mode & clear bindings upon entering combat (always silent)
         if OneFish.isFishingMode then
-            OneFish:ExitFishingMode()
+            OneFish:ExitFishingMode(true)
         end
         if OneFish.secureButton and ClearOverrideBindings then
             ClearOverrideBindings(OneFish.secureButton)
@@ -793,7 +805,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         OneFish.secureButtonArmedTime = nil
 
     elseif event == "PLAYER_REGEN_ENABLED" then
-        OneFish:UpdateFishingMode()
+        -- Restore fishing mode upon leaving combat (always silent)
+        OneFish:UpdateFishingMode(true)
 
     elseif event == "SPELLS_CHANGED" then
         OneFish.cachedFishingSpellIndex = nil
