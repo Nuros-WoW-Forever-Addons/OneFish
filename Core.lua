@@ -163,6 +163,10 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
             if subClassID == 20 or (Enum and Enum.ItemWeaponSubclass and subClassID == Enum.ItemWeaponSubclass.FishingPole) then
                 return true
             end
+            -- If class is Weapon and subClassID is explicitly a standard weapon (not pole), return false
+            if subClassID and subClassID ~= 20 then
+                return false
+            end
         end
     end
 
@@ -170,11 +174,19 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
     local getItemInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
     if getItemInfo then
         local target = itemID or itemLink
+        -- Return 7 of GetItemInfo is itemSubType in standard client, return 6 in vanilla 1.12
         local ok, _, _, _, _, itemType, itemSubType = pcall(getItemInfo, target)
         if ok and itemSubType then
             local lower = string.lower(itemSubType)
-            if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "peche") or string.find(lower, "pesca") then
+            if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "caña de pescar") then
                 return true
+            end
+            -- If itemSubType explicitly identifies as a standard weapon type, reject immediately
+            if string.find(lower, "mace") or string.find(lower, "sword") or string.find(lower, "axe")
+                or string.find(lower, "dagger") or string.find(lower, "staff") or string.find(lower, "stave")
+                or string.find(lower, "polearm") or string.find(lower, "bow") or string.find(lower, "gun")
+                or string.find(lower, "crossbow") or string.find(lower, "wand") or string.find(lower, "fist") then
+                return false
             end
         end
     end
@@ -186,8 +198,11 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
             for _, line in ipairs(data.lines) do
                 if line.leftText then
                     local lower = string.lower(line.leftText)
-                    if string.find(lower, "fishing pole") or string.find(lower, "requires fishing") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") then
+                    if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "caña de pescar") then
                         return true
+                    end
+                    if string.find(lower, "mace") or string.find(lower, "sword") or string.find(lower, "axe") or string.find(lower, "dagger") then
+                        return false
                     end
                 end
             end
@@ -201,15 +216,38 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
             self.scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
         end
         self.scanTooltip:ClearLines()
+        -- Crucial: wipe fontstrings so previously scanned items cannot leak cached text into this scan
+        for i = 1, 30 do
+            local l = _G["OneFishScanTooltipTextLeft" .. i]
+            if l then l:SetText("") end
+            local r = _G["OneFishScanTooltipTextRight" .. i]
+            if r then r:SetText("") end
+        end
+
         local ok = pcall(self.scanTooltip.SetInventoryItem, self.scanTooltip, "player", slotID)
-        if ok then
+        if ok and self.scanTooltip.NumLines and self.scanTooltip:NumLines() then
             for i = 1, self.scanTooltip:NumLines() do
-                local line = _G["OneFishScanTooltipTextLeft" .. i]
-                local text = line and line:GetText()
-                if text then
-                    local lower = string.lower(text)
-                    if string.find(lower, "fishing pole") or string.find(lower, "requires fishing") then
-                        return true
+                local left = _G["OneFishScanTooltipTextLeft" .. i]
+                local right = _G["OneFishScanTooltipTextRight" .. i]
+                if left and left:IsShown() then
+                    local text = left:GetText()
+                    if text and text ~= "" then
+                        local lower = string.lower(text)
+                        if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "caña de pescar") then
+                            return true
+                        end
+                        if string.find(lower, "mace") or string.find(lower, "sword") or string.find(lower, "axe") or string.find(lower, "dagger") or string.find(lower, "staff") then
+                            return false
+                        end
+                    end
+                end
+                if right and right:IsShown() then
+                    local text = right:GetText()
+                    if text and text ~= "" then
+                        local lower = string.lower(text)
+                        if string.find(lower, "fishing pole") or string.find(lower, "angelrute") or string.find(lower, "canne à pêche") or string.find(lower, "caña de pescar") then
+                            return true
+                        end
                     end
                 end
             end
@@ -220,7 +258,7 @@ function OneFish:IsItemAFishingPole(itemLink, slotID, itemID)
     local itemName = self:GetItemNameFromLink(itemLink)
     if itemName then
         local lowerName = string.lower(itemName)
-        if string.find(lowerName, "fishing pole") or string.find(lowerName, "angelrute") or string.find(lowerName, "canne à pêche") then
+        if string.find(lowerName, "fishing pole") or string.find(lowerName, "angelrute") or string.find(lowerName, "canne à pêche") or string.find(lowerName, "caña de pescar") then
             -- Exclude non-pole weapon with fishing in name (Nat Pagle's Fish Terminator - 19944)
             if itemID ~= 19944 then
                 return true
