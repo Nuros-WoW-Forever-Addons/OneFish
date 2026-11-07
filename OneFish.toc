@@ -2,7 +2,7 @@
 ## Title: OneFish
 ## Notes: Lightweight enhanced fishing addon with double-click casting, auto-lures, audio boosting, and fast looting.
 ## Author: Antigravity
-## Version: 1.0.0
+## Version: 1.0.1
 ## IconTexture: Interface\Icons\Trade_Fishing
 ## SavedVariables: OneFishDB
 ## OptionalDeps: OneSwatter, OnePanelUtils

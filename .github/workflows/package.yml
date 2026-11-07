@@ -19,15 +19,11 @@ jobs:
       - name: Build Addon ZIP
         run: |
           ADDON_NAME="${GITHUB_REPOSITORY#*/}"
+          ZIP_NAME="${ADDON_NAME}-latest.zip"
           mkdir -p "staging/${ADDON_NAME}"
-          rsync -av --exclude='.git' \
-                    --exclude='.github' \
-                    --exclude='.gitignore' \
-                    --exclude='staging' \
-                    --exclude='*.zip' \
-                    ./ "staging/${ADDON_NAME}/"
+          rsync -av --exclude='.git'                     --exclude='.github'                     --exclude='.gitignore'                     --exclude='staging'                     --exclude='*.zip'                     ./ "staging/${ADDON_NAME}/"
           cd staging
-          zip -r "../${ADDON_NAME}.zip" "${ADDON_NAME}"
+          zip -r "../${ZIP_NAME}" "${ADDON_NAME}"
           cd ..
 
       - name: Publish Latest Release
@@ -35,6 +31,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ADDON_NAME="${GITHUB_REPOSITORY#*/}"
+          ZIP_NAME="${ADDON_NAME}-latest.zip"
           
           # Delete existing tag/release if it exists so it updates in place
           gh release delete latest --yes || true
@@ -42,6 +39,4 @@ jobs:
           git push origin :latest || true
           
           # Create fresh release and attach the zip
-          gh release create latest "${ADDON_NAME}.zip" \
-            --title "${ADDON_NAME} (Latest Build)" \
-            --notes "Automated build from commit ${{ github.sha }}."
+          gh release create latest "${ZIP_NAME}"             --title "${ADDON_NAME} (Latest Build)"             --notes "Automated build from commit ${{ github.sha }}."

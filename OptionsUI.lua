@@ -750,20 +750,18 @@ SlashCmdList["ONEFISH"] = function(msg)
 
     elseif cmd == "debug" then
         OneFish.debugMode = not OneFish.debugMode
-        if DEFAULT_CHAT_FRAME then
-            DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff[OneFish]|r Debug trace " .. (OneFish.debugMode and "|cff00ff00ON|r - double-click in the water and watch chat." or "|cffff0000OFF|r"))
-        end
+        OneFish:Print("Debug trace " .. (OneFish.debugMode and "|cff00ff00ON|r - double-click in the water and watch chat." or "|cffff0000OFF|r"), true)
 
     elseif cmd == "help" then
         OneFish:Print("Command List:", true)
-        print("  |cff00ccff/of|r or |cff00ccff/onefish|r - Open / toggle settings window")
-        print("  |cff00ccff/of status|r - Print diagnostic status (pole, spell, fishing mode)")
-        print("  |cff00ccff/of debug|r - Toggle click/cast debug trace in chat")
-        print("  |cff00ccff/of toggle|r - Toggle OneFish on/off")
-        print("  |cff00ccff/of button|r - Cycle click button (Right, Left, Either)")
-        print("  |cff00ccff/of lure|r - Toggle smart auto-lure")
-        print("  |cff00ccff/of sound|r - Toggle fishing audio boost")
-        print("  |cff00ccff/of loot|r - Toggle fast auto-loot")
+        OneFish:Print("  |cff00ccff/of|r or |cff00ccff/onefish|r - Open / toggle settings window", true)
+        OneFish:Print("  |cff00ccff/of status|r - Print diagnostic status (pole, spell, fishing mode)", true)
+        OneFish:Print("  |cff00ccff/of debug|r - Toggle click/cast debug trace in chat", true)
+        OneFish:Print("  |cff00ccff/of toggle|r - Toggle OneFish on/off", true)
+        OneFish:Print("  |cff00ccff/of button|r - Cycle click button (Right, Left, Either)", true)
+        OneFish:Print("  |cff00ccff/of lure|r - Toggle smart auto-lure", true)
+        OneFish:Print("  |cff00ccff/of sound|r - Toggle fishing audio boost", true)
+        OneFish:Print("  |cff00ccff/of loot|r - Toggle fast auto-loot", true)
     else
         OneFish:ToggleOptionsUI()
     end

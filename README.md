@@ -53,3 +53,8 @@ Then start or reload World of Warcraft (`/reload`).
 | `/of sound` | Toggle fishing audio enhancement on or off |
 | `/of loot` | Toggle fast auto-looting on or off |
 | `/of help` | Show command list |
+
+---
+
+For detailed version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
+
